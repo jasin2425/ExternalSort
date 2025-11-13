@@ -8,20 +8,20 @@
 #include <complex>
 #include <algorithm>
 #include <memory>
+#include <cstdio>
 using namespace std;
 
 # define RECORDSIZE 24
 
 //sorting by heat
 struct Record{
-    double mass;
-    double specific_heat;
-    double temperature_difference;
+    double mass = 0.0;
+    double specific_heat = 0.0;
+    double temperature_difference = 0.0;
     double heat() const {
         return mass*specific_heat*temperature_difference;
     }
 };
-
 ostream& operator<<(ostream& os, Record& r) {
     os << "{M=" << r.mass
        << " c=" << r.specific_heat
@@ -67,6 +67,7 @@ private:
             }
             if (smallest!=index) {
                 swap(heap[smallest],heap[index]);
+                index=smallest;
             }
             else {
                 break;
@@ -126,7 +127,6 @@ public:
         }
         return false;
     }
-
     void writePage(fstream& file, const vector<Record>& page_buffer) {
         file.write(reinterpret_cast<const char*>(page_buffer.data()), page_size);
         write_count++;
@@ -135,7 +135,36 @@ public:
         return b_factor;
     }
 };
-
+void printBinaryFile(const string& filename) {
+    cout << "\n--- Reading binary file: " << filename << " ---\n";
+    fstream file(filename, ios::in | ios::binary);
+    Record r{};
+    int i = 0;
+    while (file.read(reinterpret_cast<char*>(&r), sizeof(Record))) {
+        if (r.mass>0)
+            cout << "[" << i++ << "] M=" << fixed << setprecision(4) << r.mass
+                 << " C=" << r.specific_heat
+                 << " dT=" << r.temperature_difference
+                 << " | Q=" << r.heat() << endl;
+    }
+    cout << "-----------------------------------\n";
+}
+void printRuns(const int filesCounter) {
+    cout << "\n--- Reading Runs files: "  << " ---\n";
+    for (int i=0; i<filesCounter; ++i) {
+        string outputName = "run_" + to_string(i) + ".bin";
+        fstream file(outputName, ios::in | ios::binary);
+        Record r{};
+        int iter = 0;
+        while (file.read(reinterpret_cast<char*>(&r), sizeof(Record))) {
+            if (r.mass>0)
+            cout << "[runnumber: " << i << " recorditerator: "<<iter++<<" ] ""M=" << fixed << setprecision(4) << r.mass
+                 << " C=" << r.specific_heat
+                 << " dT=" << r.temperature_difference
+                 << " | Q=" << r.heat() << endl;
+        }
+    }
+}
 
 //algorithm PART1
 int createRuns(const string& input_filename, DiskManager&disk,int n_buffers) {
@@ -152,7 +181,9 @@ int createRuns(const string& input_filename, DiskManager&disk,int n_buffers) {
         for (int i=0; i<n_buffers; ++i) {
             if (disk.readPage(file,connector)) {
                 for (const auto & j : connector) {
-                    ram.push_back(j);
+                    if (j.mass > 0) {
+                        ram.push_back(j);
+                    }
                 }
             }
             else {
@@ -177,6 +208,7 @@ int createRuns(const string& input_filename, DiskManager&disk,int n_buffers) {
                 connector.clear();
             }
         }
+        //if smth wasn't pushed to disk
         if (!connector.empty()) {
             while (connector.size() < b) {
                 connector.push_back(Record{});
@@ -187,34 +219,40 @@ int createRuns(const string& input_filename, DiskManager&disk,int n_buffers) {
 
     }
     file.close();
+    cout << "\nDo you want to view files after creating Runs? (t/n)  ";
+    char choice;
+    cin >> choice;
+    if (choice == 't' || choice == 'T')
+        printRuns(files_counter);
     return files_counter;
 }
 //part2
-void mergeRuns(int filesCounter,DiskManager&disk,int nofBuffers) {
+void mergeRuns(DiskManager&disk,int nofBuffers,vector<string>filesBatch,const string& outputName) {
     //files counter is number of runs
-    int nofmergingbuffers=min(nofBuffers-1,filesCounter);
-//opening input files
-    string outputName;
+    int nofmergingbuffers=filesBatch.size();
+
+    //opening input files
     vector<unique_ptr<fstream>> input_files;
     for (int i=0; i<nofmergingbuffers; ++i) {
-        outputName= "run_" + to_string(i) + ".bin";
-        input_files.push_back( make_unique<fstream>(outputName, ios::in | ios::binary));
-        Record r{};
+        input_files.push_back( make_unique<fstream>(filesBatch[i], ios::in | ios::binary));
     }
-//opening output files
-    fstream outputfile("output.bin",ios::out|ios::binary|ios::trunc);
-    vector<vector<Record>> buffers(nofmergingbuffers);
+
+    //opening output files
+    fstream outputfile(outputName,ios::out|ios::binary|ios::trunc);
+    //buffer holds 1 page
+    vector<vector<Record>> mergingBuffers(nofmergingbuffers);
     vector<Record> outputBuffer;
-    vector<int>record_indx(nofmergingbuffers,1);
+    //vector holds
+    vector<int> recordInBufferIterator(nofmergingbuffers,1);
     MinHeap heap;
     int b=disk.getB();
 
     //initialize heap and merging buffers
     for (int i=0; i<nofmergingbuffers; ++i) {
-        if (disk.readPage(*input_files[i],buffers[i])) {
-            if (buffers[i][0].mass > 0) {
-                heap.push({buffers[i][0],i});
-                record_indx[i]=1;
+        if (disk.readPage(*input_files[i],mergingBuffers[i])) {
+            if (mergingBuffers[i][0].mass > 0) {
+                heap.push({mergingBuffers[i][0],i});
+                recordInBufferIterator[i]=1;
             }
         }
     }
@@ -228,30 +266,38 @@ void mergeRuns(int filesCounter,DiskManager&disk,int nofBuffers) {
         Record r= node.record;
         int run_index=node.run_index;
 
-        //push to output buffer
+        //push to output buffer if output buffer is full
         outputBuffer.push_back(r);
         if (outputBuffer.size()==b) {
             disk.writePage(outputfile,outputBuffer);
             outputBuffer.clear();
         }
-    //if one of the merging buffer is fully seen we read next page from disk
-        if (record_indx[run_index] >= b) {
-            if (disk.readPage(*input_files[run_index], buffers[run_index])) {
-                record_indx[run_index] = 0;
-            } else {
-                continue;
+
+//reading next page with skipping the padding
+        while (true) {
+            //if one of the merging buffer is fully seen we read next page from disk
+            if (recordInBufferIterator[run_index] >= b)
+                {
+                if (disk.readPage(*input_files[run_index], mergingBuffers[run_index])) {
+                    recordInBufferIterator[run_index] = 0;
+                }
+                else
+                    break;
+            }
+            if (mergingBuffers[run_index][recordInBufferIterator[run_index]].mass > 0) {
+                heap.push({mergingBuffers[run_index][recordInBufferIterator[run_index]], run_index});
+                recordInBufferIterator[run_index]++;
+                break;
+            }
+            //if padding then skip this elemenet
+            else {
+                recordInBufferIterator[run_index]++;
             }
         }
 
-//new smallest record in buffer we push to heap
-        if (buffers[run_index][record_indx[run_index]].mass > 0) {
-            heap.push({buffers[run_index][record_indx[run_index]], run_index});
-            record_indx[run_index]++;
-        }
 
     }
     //if output buffer is not empty ( safety, it should be) we create empty records an push it
-
     if (!outputBuffer.empty())
     {
         while (outputBuffer.size() < b) {
@@ -260,6 +306,57 @@ void mergeRuns(int filesCounter,DiskManager&disk,int nofBuffers) {
         disk.writePage(outputfile, outputBuffer);
     }
     outputfile.close();
+}
+void deleteFiles(const vector<string>& files) {
+    for (const string& file : files) {
+        remove(file.c_str());
+    }
+}
+
+
+int mergeManager(int filesCounter,int nofBuffers,DiskManager&disk ) {
+    //files afrer creating runs
+    vector<string> filesAvailable;
+    for (int i=0 ; i<filesCounter; ++i) {
+        filesAvailable.push_back("run_" + to_string(i) + ".bin");
+    }
+    int filesPossibleToMarge=nofBuffers-1;
+    int phase=0;
+    int outputCounter=0;
+    vector<string> filesAfterMergingPhase;
+    vector<string> filesCurrentlyMerged;
+    while (filesAvailable.size()>1) {
+        for (int j=0; j<filesAvailable.size(); j+=filesPossibleToMarge) {
+            filesCurrentlyMerged.clear();
+
+            for (int i=j; i<j+filesPossibleToMarge && i<filesAvailable.size(); ++i) {
+                filesCurrentlyMerged.push_back(filesAvailable[i]);
+            }
+            string outputName="phase_" +to_string(phase) +"_run_"+to_string(outputCounter)+".bin";
+            mergeRuns(disk,nofBuffers,filesCurrentlyMerged,outputName);
+            filesAfterMergingPhase.push_back(outputName);
+            outputCounter++;
+        }
+        deleteFiles(filesAvailable);
+        filesAvailable=filesAfterMergingPhase;
+        filesAfterMergingPhase.clear();
+        phase++;
+        cout << "\n--- Phase number: " << phase << " has ended---";
+
+        cout << "\nDo you want to view files after this phase? (t/n)  ";
+        char choice;
+        cin >> choice;
+        if (choice == 't' || choice == 'T') {
+            for (const string& f : filesAvailable) {
+                printBinaryFile(f);
+            }
+        }
+    }
+
+    remove("output.bin");
+
+    rename(filesAvailable[0].c_str(), "output.bin");
+    return phase;
 }
 void generateRandomBinaryFile(const string& filename, const int n_records) {
     cout << "Generating " << n_records << " binary records to: " << filename << endl;
@@ -276,37 +373,6 @@ void generateRandomBinaryFile(const string& filename, const int n_records) {
         file.write(reinterpret_cast<const char*>(&r), RECORDSIZE);
     }
 }
-void printBinaryFile(const string& filename) {
-    cout << "\n--- Reading binary file: " << filename << " ---\n";
-    fstream file(filename, ios::in | ios::binary);
-    Record r{};
-    int i = 0;
-    while (file.read(reinterpret_cast<char*>(&r), sizeof(Record))) {
-        cout << "[" << i++ << "] M=" << fixed << setprecision(4) << r.mass
-             << " C=" << r.specific_heat
-             << " dT=" << r.temperature_difference
-             << " | Q=" << r.heat() << endl;
-    }
-    cout << "-----------------------------------\n";
-}
-void printRuns(int filesCounter) {
-    cout << "\n--- Reading Runs files: "  << " ---\n";
-    string outputName="";
-    for (int i=0; i<filesCounter; ++i) {
-        outputName= "run_" + to_string(i) + ".bin";
-        fstream file(outputName, ios::in | ios::binary);
-        Record r{};
-        int iter = 0;
-        while (file.read(reinterpret_cast<char*>(&r), sizeof(Record))) {
-            cout << "[runnumber: " << i << " recorditerator: "<<iter++<<" ] ""M=" << fixed << setprecision(4) << r.mass
-                 << " C=" << r.specific_heat
-                 << " dT=" << r.temperature_difference
-                 << " | Q=" << r.heat() << endl;
-        }
-    }
-
-
-}
 
 int main() {
     int n;
@@ -320,18 +386,19 @@ int main() {
     cin>>b;
     string filename = "dane.bin";
     generateRandomBinaryFile(filename,n);
-    printBinaryFile(filename);
+  //  printBinaryFile(filename);
 
     DiskManager disk(b);
     fstream fileIn(filename, ios::in | ios::binary);
     vector<Record> myBuffer(b);
 
     const int filesCounter=createRuns(filename,disk,nofBuffors);
-    mergeRuns(filesCounter,disk,nofBuffors);
+    int phase=mergeManager(filesCounter, nofBuffors, disk);
     printBinaryFile("output.bin");
-    printRuns(filesCounter);
+ //   printRuns(filesCounter);
 
-    cout << "\nStatystyki Dysku:" << endl;
-    cout << "Odczyty stron: " << disk.read_count << endl;
-    cout << "Zapisy stron: " << disk.write_count << endl;
+    cout << "\nSorting Stats:" << endl;
+    cout << "Page readings: " << disk.read_count << endl;
+    cout << "Page writings: " << disk.write_count << endl;
+    cout<<"Number of phases: "<<phase<<endl;
 }
