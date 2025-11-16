@@ -385,8 +385,6 @@ int mergeManager(int filesCounter,int nofBuffers,DiskManager&disk ) {
     int filesPossibleToMarge=nofBuffers-1;
     int phase=0;
     int outputCounter=0;
-    cout << "\n--- Stan Poczatkowy (przed Faza 1) ---";
-    cout << "\nLiczba serii na dysku: " << filesAvailable.size() << endl;
     vector<string> filesAfterMergingPhase;
     vector<string> filesCurrentlyMerged;
     while (filesAvailable.size()>1) {
