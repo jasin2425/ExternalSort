@@ -135,6 +135,8 @@ public:
         return b_factor;
     }
 };
+
+//reading and printing data
 void printBinaryFile(const string& filename) {
     cout << "\n--- Reading binary file: " << filename << " ---\n";
     fstream file(filename, ios::in | ios::binary);
@@ -146,6 +148,7 @@ void printBinaryFile(const string& filename) {
                  << " C=" << r.specific_heat
                  << " dT=" << r.temperature_difference
                  << " | Q=" << r.heat() << endl;
+              //  cout<<r.mass<<" "<<r.specific_heat<<" "<<r.temperature_difference<<endl;
     }
     cout << "-----------------------------------\n";
 }
@@ -165,8 +168,67 @@ void printRuns(const int filesCounter) {
         }
     }
 }
+vector<Record> generateRandomRecords(const int n_records) {
+    cout << "Generating " << n_records << " random records in memory..." << endl;
+    vector<Record> records;
+    records.reserve(n_records);
 
-//algorithm PART1
+    mt19937 gen(random_device{}());
+    uniform_real_distribution<> mass_dist(1.0, 100.0);
+    uniform_real_distribution<> heat_dist(0.1, 5.0);
+    uniform_real_distribution<> temp_dist(-50.0, 50.0);
+
+    for (int i = 0; i < n_records; ++i) {
+        records.push_back(Record{mass_dist(gen), heat_dist(gen), temp_dist(gen)});
+    }
+    return records;
+}
+void writeVectorToBinaryFile(const string& filename, const vector<Record>& records) {
+    cout << "Writing " << records.size() << " records to binary file: " << filename << endl;
+    fstream file(filename, ios::out | ios::binary | ios::trunc);
+
+    for (const auto& r : records) {
+        file.write(reinterpret_cast<const char*>(&r), RECORDSIZE);
+    }
+    file.close();
+
+    ifstream test(filename, ios::binary | ios::ate);
+    long long size = test.tellg();
+    cout << "File size: " << size << " bytes." << endl;
+    cout << "Expected: " << (long long)records.size() * RECORDSIZE << " bytes." << endl;
+}
+vector<Record> readRecordsFromKeyboard() {
+    cout << "Enter records(3 doubles) separeted by a space" << endl;
+    cout << "enter letter to end" << endl;
+    vector<Record> records;
+    Record r;
+
+    while (true) {
+        cout << "Enter [mass], [specific heat], [temperature_difference] ";
+        if (!(cin >> r.mass >> r.specific_heat >> r.temperature_difference) || r.mass == 0) {
+            break;
+        }
+        records.push_back(r);
+    }
+    cin.clear();
+    cin.ignore(10000, '\n');
+    return records;
+}
+
+vector<Record> readRecordsFromTxtFile(const string& txt_filename) {
+    vector<Record> records;
+    fstream file(txt_filename, ios::in);
+
+    Record r;
+    while (file >> r.mass >> r.specific_heat >> r.temperature_difference) {
+        records.push_back(r);
+    }
+    file.close();
+    return records;
+}
+
+
+//ALGORITHM PART
 int createRuns(const string& input_filename, DiskManager&disk,int n_buffers) {
     fstream file(input_filename, ios::in| ios::binary);
 
@@ -323,6 +385,8 @@ int mergeManager(int filesCounter,int nofBuffers,DiskManager&disk ) {
     int filesPossibleToMarge=nofBuffers-1;
     int phase=0;
     int outputCounter=0;
+    cout << "\n--- Stan Poczatkowy (przed Faza 1) ---";
+    cout << "\nLiczba serii na dysku: " << filesAvailable.size() << endl;
     vector<string> filesAfterMergingPhase;
     vector<string> filesCurrentlyMerged;
     while (filesAvailable.size()>1) {
@@ -358,40 +422,52 @@ int mergeManager(int filesCounter,int nofBuffers,DiskManager&disk ) {
     rename(filesAvailable[0].c_str(), "output.bin");
     return phase;
 }
-void generateRandomBinaryFile(const string& filename, const int n_records) {
-    cout << "Generating " << n_records << " binary records to: " << filename << endl;
-    fstream file(filename, ios::out | ios::binary | ios::trunc);
-
-    mt19937 gen(random_device{}());
-    uniform_real_distribution<> mass_dist(1.0, 100.0);
-    uniform_real_distribution<> heat_dist(0.1, 5.0);
-    uniform_real_distribution<> temp_dist(-50.0, 50.0);
-
-    for (int i = 0; i < n_records; ++i) {
-        Record r{mass_dist(gen), heat_dist(gen), temp_dist(gen)};
-//cast to bin files as just bytes
-        file.write(reinterpret_cast<const char*>(&r), RECORDSIZE);
-    }
-}
 
 int main() {
-    int n;
+    long long n;
     int nofBuffors;
     int b;
-    cout << "Enter:\n1. N (number of records in the file)\n2. n (number of buffers available for sorting)\n3. b (blocking factor) \n1. N: ";
-    cin>>n;
-    cout<<"2.n: ";
+    cout << "Enter:\n1. n (number of buffers available for sorting)\n2. b (blocking factor)  ";
+    cout<<"\n1.n: ";
     cin>>nofBuffors;
-    cout<<"3.b: ";
+    cout<<"\n2.b: ";
     cin>>b;
-    string filename = "dane.bin";
-    generateRandomBinaryFile(filename,n);
-  //  printBinaryFile(filename);
+
+    vector<Record> recordsToProcess;
+    cout << "\nSelect data source:\n";
+    cout << "1. Generate random records (provide N)\n";
+    cout << "2. Enter manually from keyboard\n";
+    cout << "3. Read from file 'dane_testowe.txt'\n";
+    cout << "Choice: ";
+    int choice;
+    cin >> choice;
+    const string filename = "dane.bin";
+    switch (choice) {
+        case 1: {
+            long long n;
+            cout << "\nEnter N (number of records to generate): ";
+            cin >> n;
+            recordsToProcess = generateRandomRecords(n);
+            break;
+        }
+        case 2:
+            recordsToProcess = readRecordsFromKeyboard();
+            break;
+        case 3:
+            recordsToProcess = readRecordsFromTxtFile("dane_testowe.txt");
+            break;
+        default:
+            cout << "Invalid choice." << endl;
+            return 1;
+    }
+    if (recordsToProcess.empty()) {
+        cout << "No records loaded. Exiting program." << endl;
+        return 0;
+    }
+    writeVectorToBinaryFile(filename, recordsToProcess);
+    printBinaryFile(filename);
 
     DiskManager disk(b);
-    fstream fileIn(filename, ios::in | ios::binary);
-    vector<Record> myBuffer(b);
-
     const int filesCounter=createRuns(filename,disk,nofBuffors);
     int phase=mergeManager(filesCounter, nofBuffors, disk);
     printBinaryFile("output.bin");
